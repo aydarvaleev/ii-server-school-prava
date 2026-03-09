@@ -4,8 +4,16 @@ const rateLimit = require('express-rate-limit');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
+
+// Разрешаем запросы с любого домена (включая GetCourse)
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
+app.options('*', cors());
+
 app.use(express.json({ limit: '10mb' }));
-app.use(cors());
 
 // ─── ЛИМИТЫ ЗАПРОСОВ ────────────────────────────────────────────────
 // 10 запросов в минуту на одного пользователя
