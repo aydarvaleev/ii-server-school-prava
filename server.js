@@ -138,8 +138,9 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     let finalMessages = [...messages];
+    let extractedFileText = null;
 
-    // Если прикреплён docx или pdf — извлекаем текст через Claude Files API
+    // Если прикреплён docx или pdf — извлекаем текст
     if (file && file.base64 && file.ext) {
       const buffer = Buffer.from(file.base64, 'base64');
       const lastMsg = finalMessages[finalMessages.length - 1];
@@ -163,14 +164,15 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
             }
           ]
         };
+        extractedFileText = '[PDF документ]';
       } else if (file.ext === 'docx') {
-        // docx — извлекаем текст через mammoth на сервере
+        // docx — извлекаем текст через mammoth
         const mammoth = require('mammoth');
         const result = await mammoth.extractRawText({ buffer });
-        const docText = result.value || '';
+        extractedFileText = result.value || '';
         finalMessages[finalMessages.length - 1] = {
           role: 'user',
-          content: `${lastMsg.content || 'Проанализируй документ'}\n\n[Файл: ${file.name}]\n\n${docText}`
+          content: `${lastMsg.content || 'Проанализируй документ'}\n\n[Файл: ${file.name}]\n\n${extractedFileText}`
         };
       }
     }
@@ -183,7 +185,7 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
     });
 
     const reply = response.content?.[0]?.text || 'Не удалось получить ответ.';
-    res.json({ reply });
+    res.json({ reply, extractedText: extractedFileText || null });
 
   } catch (err) {
     console.error('Ошибка Claude API:', err.message);
