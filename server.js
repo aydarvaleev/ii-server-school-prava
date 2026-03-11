@@ -122,6 +122,35 @@ const systemPrompts = {
 Конструктивный и нейтральный тон. Приоритизация рисков. Объём ответа — не более 1000 слов.`
 };
 
+// ─── ГАРАНТ API — ПОИСК ДОКУМЕНТОВ ─────────────────────────────────
+async function searchGarant(query) {
+  try {
+    const token = process.env.GARANT_TOKEN;
+    if (!token) return null;
+
+    const response = await fetch('https://api.garant.ru/v1/search', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        text: query,
+        count: 5,
+        sort: 0
+      })
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.documents || [];
+  } catch (err) {
+    console.error('Ошибка ГАРАНТ API:', err.message);
+    return null;
+  }
+}
+
 // ─── ОСНОВНОЙ МАРШРУТ ────────────────────────────────────────────────
 app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
   const { messages, mode, file } = req.body;
@@ -132,7 +161,6 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
 
   const modeNum = parseInt(mode) || 1;
   const modePrompt = systemPrompts[modeNum] || systemPrompts[1];
-  const fullSystemPrompt = globalPrompt + '\n\n' + modePrompt;
 
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -146,27 +174,18 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
       const lastMsg = finalMessages[finalMessages.length - 1];
 
       if (file.ext === 'pdf') {
-        // PDF передаём напрямую как document
         finalMessages[finalMessages.length - 1] = {
           role: 'user',
           content: [
             {
               type: 'document',
-              source: {
-                type: 'base64',
-                media_type: 'application/pdf',
-                data: file.base64
-              }
+              source: { type: 'base64', media_type: 'application/pdf', data: file.base64 }
             },
-            {
-              type: 'text',
-              text: lastMsg.content || 'Проанализируй этот документ'
-            }
+            { type: 'text', text: lastMsg.content || 'Проанализируй этот документ' }
           ]
         };
         extractedFileText = '[PDF документ]';
       } else if (file.ext === 'docx') {
-        // docx — извлекаем текст через mammoth
         const mammoth = require('mammoth');
         const result = await mammoth.extractRawText({ buffer });
         extractedFileText = result.value || '';
@@ -176,6 +195,26 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
         };
       }
     }
+
+    // ─── ПОИСК В ГАРАНТ ─────────────────────────────────────────────
+    const lastUserMessage = finalMessages[finalMessages.length - 1];
+    const queryText = typeof lastUserMessage.content === 'string'
+      ? lastUserMessage.content
+      : lastUserMessage.content?.[lastUserMessage.content.length - 1]?.text || '';
+
+    const garantDocs = await searchGarant(queryText.slice(0, 300));
+
+    let garantContext = '';
+    if (garantDocs && garantDocs.length > 0) {
+      garantContext = '\n\n─── ДОКУМЕНТЫ ИЗ БАЗЫ ГАРАНТ ───\n' +
+        'Следующие документы найдены в правовой базе ГАРАНТ и могут быть релевантны запросу.\n' +
+        'При необходимости ссылайся на них в ответе:\n\n' +
+        garantDocs.map((doc, i) =>
+          `${i + 1}. ${doc.name}\n   Ссылка: https://internet.garant.ru${doc.url}`
+        ).join('\n\n');
+    }
+
+    const fullSystemPrompt = globalPrompt + '\n\n' + modePrompt + garantContext;
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -189,7 +228,6 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
 
   } catch (err) {
     console.error('Ошибка Claude API:', err.message);
-    // Возвращаем точную ошибку чтобы понять причину
     res.status(500).json({ error: 'Ошибка сервера: ' + err.message });
   }
 });
