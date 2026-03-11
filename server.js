@@ -5,6 +5,9 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
 
+// Доверяем прокси Railway
+app.set('trust proxy', 1);
+
 // Разрешаем запросы с любого домена (включая GetCourse)
 app.use(cors({
   origin: '*',
