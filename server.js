@@ -122,11 +122,23 @@ const systemPrompts = {
 Конструктивный и нейтральный тон. Приоритизация рисков. Объём ответа — не более 1000 слов.`
 };
 
+// ─── КЕШ ДЛЯ ГАРАНТ ЗАПРОСОВ ────────────────────────────────────────
+const garantCache = new Map();
+const CACHE_TTL = 60 * 60 * 1000; // 1 час
+
 // ─── ГАРАНТ API — ПОИСК ДОКУМЕНТОВ ─────────────────────────────────
 async function searchGarant(query) {
   try {
     const token = process.env.GARANT_TOKEN;
     if (!token) return null;
+
+    // Проверяем кеш
+    const cacheKey = query.trim().toLowerCase();
+    const cached = garantCache.get(cacheKey);
+    if (cached && Date.now() - cached.time < CACHE_TTL) {
+      console.log('ГАРАНТ: результат из кеша');
+      return cached.data;
+    }
 
     const response = await fetch('https://api.garant.ru/v1/search', {
       method: 'POST',
@@ -144,7 +156,18 @@ async function searchGarant(query) {
 
     if (!response.ok) return null;
     const data = await response.json();
-    return data.documents || [];
+    const docs = data.documents || [];
+
+    // Сохраняем в кеш
+    garantCache.set(cacheKey, { data: docs, time: Date.now() });
+
+    // Чистим старые записи кеша (больше 500 записей)
+    if (garantCache.size > 500) {
+      const oldestKey = garantCache.keys().next().value;
+      garantCache.delete(oldestKey);
+    }
+
+    return docs;
   } catch (err) {
     console.error('Ошибка ГАРАНТ API:', err.message);
     return null;
@@ -196,22 +219,24 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
       }
     }
 
-    // ─── ПОИСК В ГАРАНТ ─────────────────────────────────────────────
-    const lastUserMessage = finalMessages[finalMessages.length - 1];
-    const queryText = typeof lastUserMessage.content === 'string'
-      ? lastUserMessage.content
-      : lastUserMessage.content?.[lastUserMessage.content.length - 1]?.text || '';
-
-    const garantDocs = await searchGarant(queryText.slice(0, 300));
-
+    // ─── ПОИСК В ГАРАНТ (только режимы 1 и 5) ───────────────────────
     let garantContext = '';
-    if (garantDocs && garantDocs.length > 0) {
-      garantContext = '\n\n─── ДОКУМЕНТЫ ИЗ БАЗЫ ГАРАНТ ───\n' +
-        'Следующие документы найдены в правовой базе ГАРАНТ и могут быть релевантны запросу.\n' +
-        'При необходимости ссылайся на них в ответе:\n\n' +
-        garantDocs.map((doc, i) =>
-          `${i + 1}. ${doc.name}\n   Ссылка: https://internet.garant.ru${doc.url}`
-        ).join('\n\n');
+    if (modeNum === 1 || modeNum === 5) {
+      const lastUserMessage = finalMessages[finalMessages.length - 1];
+      const queryText = typeof lastUserMessage.content === 'string'
+        ? lastUserMessage.content
+        : lastUserMessage.content?.[lastUserMessage.content.length - 1]?.text || '';
+
+      const garantDocs = await searchGarant(queryText.slice(0, 300));
+
+      if (garantDocs && garantDocs.length > 0) {
+        garantContext = '\n\n─── ДОКУМЕНТЫ ИЗ БАЗЫ ГАРАНТ ───\n' +
+          'Следующие документы найдены в правовой базе ГАРАНТ и могут быть релевантны запросу.\n' +
+          'При необходимости ссылайся на них в ответе:\n\n' +
+          garantDocs.map((doc, i) =>
+            `${i + 1}. ${doc.name}\n   Ссылка: https://internet.garant.ru${doc.url}`
+          ).join('\n\n');
+      }
     }
 
     const fullSystemPrompt = globalPrompt + '\n\n' + modePrompt + garantContext;
