@@ -124,27 +124,62 @@ const systemPrompts = {
 
 // ─── ОСНОВНОЙ МАРШРУТ ────────────────────────────────────────────────
 app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
-  const { messages, mode } = req.body;
+  const { messages, mode, file } = req.body;
 
-  // Проверка входных данных
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Некорректный запрос: отсутствуют сообщения.' });
   }
 
   const modeNum = parseInt(mode) || 1;
   const modePrompt = systemPrompts[modeNum] || systemPrompts[1];
-
-  // Объединяем общий промпт + промпт режима
   const fullSystemPrompt = globalPrompt + '\n\n' + modePrompt;
 
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+    let finalMessages = [...messages];
+
+    // Если прикреплён docx или pdf — извлекаем текст через Claude Files API
+    if (file && file.base64 && file.ext) {
+      const buffer = Buffer.from(file.base64, 'base64');
+      const lastMsg = finalMessages[finalMessages.length - 1];
+
+      if (file.ext === 'pdf') {
+        // PDF передаём напрямую как document
+        finalMessages[finalMessages.length - 1] = {
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: 'application/pdf',
+                data: file.base64
+              }
+            },
+            {
+              type: 'text',
+              text: lastMsg.content || 'Проанализируй этот документ'
+            }
+          ]
+        };
+      } else if (file.ext === 'docx') {
+        // docx — извлекаем текст через mammoth на сервере
+        const mammoth = require('mammoth');
+        const result = await mammoth.extractRawText({ buffer });
+        const docText = result.value || '';
+        finalMessages[finalMessages.length - 1] = {
+          role: 'user',
+          content: `${lastMsg.content || 'Проанализируй документ'}\n\n[Файл: ${file.name}]\n\n${docText}`
+        };
+      }
+    }
+
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1500,
       system: fullSystemPrompt,
-      messages: messages
+      messages: finalMessages
     });
 
     const reply = response.content?.[0]?.text || 'Не удалось получить ответ.';
