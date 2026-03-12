@@ -246,10 +246,11 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
       const garantDocs = await searchGarant(searchPhrase);
 
       if (garantDocs && garantDocs.length > 0) {
+        const top5 = garantDocs.slice(0, 5);
+        console.log('ГАРАНТ топ-5 документов:', top5.map(d => d.name).join(' | '));
         garantContext = '\n\n─── ДОКУМЕНТЫ ИЗ БАЗЫ ГАРАНТ ───\n' +
-          'Следующие документы найдены в правовой базе ГАРАНТ и могут быть релевантны запросу.\n' +
-          'При необходимости ссылайся на них в ответе:\n\n' +
-          garantDocs.map((doc, i) =>
+          'Следующие документы найдены в правовой базе ГАРАНТ. Обязательно укажи ссылки на релевантные документы в своём ответе в формате: [Название документа](ссылка)\n\n' +
+          top5.map((doc, i) =>
             `${i + 1}. ${doc.name}\n   Ссылка: https://internet.garant.ru${doc.url}`
           ).join('\n\n');
       }
