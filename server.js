@@ -227,6 +227,7 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
 
     // ─── ПОИСК В ГАРАНТ (только режимы 1 и 5) ───────────────────────
     let garantContext = '';
+    console.log('Режим запроса:', modeNum, '| ГАРАНТ активен:', modeNum === 1 || modeNum === 5);
     if (modeNum === 1 || modeNum === 5) {
       const lastUserMessage = finalMessages[finalMessages.length - 1];
       const queryText = typeof lastUserMessage.content === 'string'
