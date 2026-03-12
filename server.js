@@ -133,15 +133,20 @@ const CACHE_TTL = 60 * 60 * 1000; // 1 час
 async function searchGarant(query) {
   try {
     const token = process.env.GARANT_TOKEN;
-    if (!token) return null;
+    if (!token) {
+      console.log('ГАРАНТ: токен не найден');
+      return null;
+    }
 
-    // Проверяем кеш
     const cacheKey = query.trim().toLowerCase();
     const cached = garantCache.get(cacheKey);
     if (cached && Date.now() - cached.time < CACHE_TTL) {
-      console.log('ГАРАНТ: результат из кеша');
+      console.log('ГАРАНТ: из кеша');
       return cached.data;
     }
+
+    const requestBody = { text: query, page: 1, env: 'internet', sort: 0, sortOrder: 0 };
+    console.log('ГАРАНТ запрос:', JSON.stringify(requestBody));
 
     const response = await fetch('https://api.garant.ru/v2/search', {
       method: 'POST',
@@ -150,31 +155,27 @@ async function searchGarant(query) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({
-        text: query,
-        page: 1,
-        env: 'internet',
-        sort: 0,
-        sortOrder: 0
-      })
+      body: JSON.stringify(requestBody)
     });
 
+    console.log('ГАРАНТ статус:', response.status, response.statusText);
+    const rawText = await response.text();
+    console.log('ГАРАНТ ответ:', rawText.slice(0, 500));
+
     if (!response.ok) return null;
-    const data = await response.json();
+
+    const data = JSON.parse(rawText);
     const docs = data.documents || [];
+    console.log('ГАРАНТ документов найдено:', docs.length);
 
-    // Сохраняем в кеш
     garantCache.set(cacheKey, { data: docs, time: Date.now() });
-
-    // Чистим старые записи кеша (больше 500 записей)
     if (garantCache.size > 500) {
-      const oldestKey = garantCache.keys().next().value;
-      garantCache.delete(oldestKey);
+      garantCache.delete(garantCache.keys().next().value);
     }
 
     return docs;
   } catch (err) {
-    console.error('Ошибка ГАРАНТ API:', err.message);
+    console.error('ГАРАНТ исключение:', err.message);
     return null;
   }
 }
