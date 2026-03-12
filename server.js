@@ -143,7 +143,7 @@ async function searchGarant(query) {
       return cached.data;
     }
 
-    const response = await fetch('https://api.garant.ru/v1/search', {
+    const response = await fetch('https://api.garant.ru/v2/search', {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
@@ -152,8 +152,10 @@ async function searchGarant(query) {
       },
       body: JSON.stringify({
         text: query,
-        count: 5,
-        sort: 0
+        page: 1,
+        env: 'internet',
+        sort: 0,
+        sortOrder: 0
       })
     });
 
