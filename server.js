@@ -234,7 +234,16 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
         ? lastUserMessage.content
         : lastUserMessage.content?.[lastUserMessage.content.length - 1]?.text || '';
 
-      const garantDocs = await searchGarant(queryText.slice(0, 300));
+      // Формируем короткую поисковую фразу для ГАРАНТа (до 60 символов)
+      // Убираем вопросительные слова и берём суть
+      const stopWords = ['как', 'что', 'где', 'когда', 'зачем', 'почему', 'какова', 'каков', 'правомерен', 'ли', 'и', 'в', 'на', 'по', 'с', 'о', 'а', 'но'];
+      const words = queryText.trim().split(/\s+/)
+        .filter(w => w.length > 3 && !stopWords.includes(w.toLowerCase()))
+        .slice(0, 5)
+        .join(' ');
+      const searchPhrase = words.slice(0, 80);
+      console.log('ГАРАНТ поисковая фраза:', searchPhrase);
+      const garantDocs = await searchGarant(searchPhrase);
 
       if (garantDocs && garantDocs.length > 0) {
         garantContext = '\n\n─── ДОКУМЕНТЫ ИЗ БАЗЫ ГАРАНТ ───\n' +
