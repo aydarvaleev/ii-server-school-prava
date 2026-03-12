@@ -217,12 +217,14 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
     }
 
     // Режим сравнения двух документов
+    console.log('compareMode:', compareMode, '| file:', !!file, '| file2:', !!file2);
     if (compareMode && file && file2) {
       const doc1 = await extractFileText(file);
       const doc2 = await extractFileText(file2);
       const lastMsg = finalMessages[finalMessages.length - 1];
       const baseText = typeof lastMsg.content === 'string' ? lastMsg.content : '';
 
+      console.log('doc1:', !!doc1, '| doc2:', !!doc2);
       if (doc1 && doc2) {
         const buildContent = (doc, label) => {
           if (doc.type === 'pdf') return [
