@@ -223,7 +223,7 @@ async function searchGarant(query) {
 
 // ─── ОСНОВНОЙ МАРШРУТ ────────────────────────────────────────────────
 app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
-  const { messages, mode, file } = req.body;
+  const { messages, mode, file, file2, compareMode } = req.body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Некорректный запрос: отсутствуют сообщения.' });
@@ -238,8 +238,45 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
     let finalMessages = [...messages];
     let extractedFileText = null;
 
-    // Если прикреплён docx или pdf — извлекаем текст
-    if (file && file.base64 && file.ext) {
+    // Вспомогательная функция извлечения текста
+    async function extractFileText(f) {
+      if (!f || !f.base64 || !f.ext) return null;
+      if (f.ext === 'pdf') return { type: 'pdf', data: f.base64, name: f.name };
+      if (f.ext === 'docx') {
+        const mammoth = require('mammoth');
+        const buf = Buffer.from(f.base64, 'base64');
+        const res = await mammoth.extractRawText({ buffer: buf });
+        return { type: 'text', text: res.value || '', name: f.name };
+      }
+      return null;
+    }
+
+    // Режим сравнения двух документов
+    if (compareMode && file && file2) {
+      const doc1 = await extractFileText(file);
+      const doc2 = await extractFileText(file2);
+      const lastMsg = finalMessages[finalMessages.length - 1];
+      const baseText = typeof lastMsg.content === 'string' ? lastMsg.content : '';
+
+      if (doc1 && doc2) {
+        const buildContent = (doc, label) => {
+          if (doc.type === 'pdf') return [
+            { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: doc.data } },
+            { type: 'text', text: `[${label}: ${doc.name}]` }
+          ];
+          return [{ type: 'text', text: `=== ${label}: ${doc.name} ===\n\n${doc.text}` }];
+        };
+        const contentArr = [
+          ...buildContent(doc1, 'ВЕРСИЯ 1 — исходный документ'),
+          ...buildContent(doc2, 'ВЕРСИЯ 2 — документ с правками'),
+          { type: 'text', text: baseText || 'Проанализируй изменения между версиями: какие положения изменены, какие создают юридические риски, как изменился баланс интересов сторон.' }
+        ];
+        finalMessages[finalMessages.length - 1] = { role: 'user', content: contentArr };
+        extractedFileText = '[Сравнение двух документов]';
+      }
+    }
+    // Обычный режим — один файл
+    else if (file && file.base64 && file.ext) {
       const buffer = Buffer.from(file.base64, 'base64');
       const lastMsg = finalMessages[finalMessages.length - 1];
 
