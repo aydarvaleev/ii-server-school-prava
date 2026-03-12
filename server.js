@@ -149,17 +149,73 @@ async function searchGarant(query) {
 }
 
 // ─── ИЗВЛЕЧЕНИЕ ТЕКСТА ───────────────────────────────────────────────
+// Извлекаем текст по абзацам — сохраняет структуру документа
+function extractDocxText(buf) {
+  const AdmZip = require('adm-zip') // fallback если нет — используем mammoth
+  try {
+    const zip = new AdmZip(buf);
+    const xml = zip.readAsText('word/document.xml');
+    const { DOMParser } = require('@xmldom/xmldom');
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    const NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+    const paras = doc.getElementsByTagNameNS(NS, 'p');
+    const lines = [];
+    for (let i = 0; i < paras.length; i++) {
+      const ts = paras[i].getElementsByTagNameNS(NS, 't');
+      let line = '';
+      for (let j = 0; j < ts.length; j++) line += ts[j].textContent || '';
+      if (line.trim()) lines.push(line.trim());
+    }
+    return lines.join('\n');
+  } catch(e) {
+    return null;
+  }
+}
+
 async function extractFileText(f) {
   if (!f || !f.base64 || !f.ext) return null;
   if (f.ext === 'pdf') return { type: 'pdf', data: f.base64, name: f.name };
   if (f.ext === 'docx') {
     const buf = Buffer.from(f.base64, 'base64');
-    const res = await mammoth.extractRawText({ buffer: buf });
-    let text = res.value || '';
+    let text = '';
+    try {
+      // Читаем docx как zip и парсим XML по абзацам — сохраняет структуру
+      const JSZip = require('jszip');
+      const zip = await JSZip.loadAsync(buf);
+      const xmlContent = await zip.file('word/document.xml').async('string');
+      const NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+      // Простой regex-парсинг абзацев из XML
+      const paraRegex = /<w:p[ >][\s\S]*?<\/w:p>/g;
+      const textRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+      const paragraphs = [];
+      let paraMatch;
+      while ((paraMatch = paraRegex.exec(xmlContent)) !== null) {
+        const paraXml = paraMatch[0];
+        const texts = [];
+        let tMatch;
+        const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+        while ((tMatch = tRegex.exec(paraXml)) !== null) {
+          texts.push(tMatch[1]);
+        }
+        const line = texts.join('').trim();
+        if (line) paragraphs.push(line);
+      }
+      text = paragraphs.join('\n');
+    } catch(e) {
+      // Fallback на mammoth если jszip недоступен
+      console.log('jszip failed, trying mammoth:', e.message);
+      try {
+        const res = await mammoth.extractRawText({ buffer: buf });
+        text = (res.value || '').trim();
+      } catch(e2) {
+        console.log('mammoth также не сработал:', e2.message);
+      }
+    }
     if (text.length > MAX_TEXT_CHARS) {
       text = text.slice(0, MAX_TEXT_CHARS);
-      console.log(`Текст обрезан до ${MAX_TEXT_CHARS} символов`);
+      console.log('Текст обрезан до ' + MAX_TEXT_CHARS + ' символов');
     }
+    console.log('Извлечено символов:', text.length, '| абзацев:', text.split('\n').length);
     return { type: 'text', text, name: f.name };
   }
   return null;
