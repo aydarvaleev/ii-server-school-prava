@@ -27,14 +27,11 @@ const perDayLimiter = rateLimit({
 const MAX_TEXT_CHARS = 100000; // ~70 страниц
 
 // ─── ПРОМПТЫ ─────────────────────────────────────────────────────────
-// ИСПРАВЛЕНИЕ 3: Короткий отказ на неюридические вопросы
 const globalPrompt = `ОБЩИЕ ПРАВИЛА (обязательны во всех режимах):
 
 ТЕМАТИКА:
 - Ты работаешь ТОЛЬКО по юридическим вопросам в рамках законодательства РФ.
-- Если пользователь задаёт вопрос НЕ по юридической теме (погода, рецепты, технологии, политика, тестирование интерфейса и т.д.) — ответь КОРОТКО (1-2 предложения):
-  "Я специализируюсь на юридических вопросах в рамках законодательства РФ. Если у вас есть вопрос по гражданскому, арбитражному или уголовному процессу — буду рад помочь."
-- НЕ давай длинных объяснений и НЕ перечисляй темы — только короткий вежливый отказ.
+- Если пользователь задаёт вопрос НЕ по юридической теме (например, про погоду, рецепты, технологии, политику и т.д.) — вежливо откажи и напомни, что ты специализируешься только на юридических и процессуальных вопросах.
 - Не отвечай на просьбы написать стихи, код, переводы и любой контент вне юридической сферы.
 
 ПРОДУКТЫ КЛУБА ПРОЦЕССУАЛИСТОВ:
@@ -152,6 +149,29 @@ async function searchGarant(query) {
 }
 
 // ─── ИЗВЛЕЧЕНИЕ ТЕКСТА ───────────────────────────────────────────────
+// Извлекаем текст по абзацам — сохраняет структуру документа
+function extractDocxText(buf) {
+  const AdmZip = require('adm-zip') // fallback если нет — используем mammoth
+  try {
+    const zip = new AdmZip(buf);
+    const xml = zip.readAsText('word/document.xml');
+    const { DOMParser } = require('@xmldom/xmldom');
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    const NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+    const paras = doc.getElementsByTagNameNS(NS, 'p');
+    const lines = [];
+    for (let i = 0; i < paras.length; i++) {
+      const ts = paras[i].getElementsByTagNameNS(NS, 't');
+      let line = '';
+      for (let j = 0; j < ts.length; j++) line += ts[j].textContent || '';
+      if (line.trim()) lines.push(line.trim());
+    }
+    return lines.join('\n');
+  } catch(e) {
+    return null;
+  }
+}
+
 async function extractFileText(f) {
   if (!f || !f.base64 || !f.ext) return null;
   if (f.ext === 'pdf') return { type: 'pdf', data: f.base64, name: f.name };
@@ -159,10 +179,14 @@ async function extractFileText(f) {
     const buf = Buffer.from(f.base64, 'base64');
     let text = '';
     try {
+      // Читаем docx как zip и парсим XML по абзацам — сохраняет структуру
       const JSZip = require('jszip');
       const zip = await JSZip.loadAsync(buf);
       const xmlContent = await zip.file('word/document.xml').async('string');
+      const NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+      // Простой regex-парсинг абзацев из XML
       const paraRegex = /<w:p[ >][\s\S]*?<\/w:p>/g;
+      const textRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
       const paragraphs = [];
       let paraMatch;
       while ((paraMatch = paraRegex.exec(xmlContent)) !== null) {
@@ -178,6 +202,7 @@ async function extractFileText(f) {
       }
       text = paragraphs.join('\n');
     } catch(e) {
+      // Fallback на mammoth если jszip недоступен
       console.log('jszip failed, trying mammoth:', e.message);
       try {
         const res = await mammoth.extractRawText({ buffer: buf });
