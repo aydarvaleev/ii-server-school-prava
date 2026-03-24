@@ -14,17 +14,35 @@ app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders:
 app.options('*', cors());
 app.use(express.json({ limit: '10mb' }));
 
-// ─── ЛИМИТЫ ──────────────────────────────────────────────────────────
+// ─── ЛИМИТЫ (базовые — для неизвестного тарифа) ─────────────────────
 const perMinuteLimiter = rateLimit({
   windowMs: 60 * 1000, max: 10,
-  message: { error: 'Превышен лимит: не более 10 запросов в минуту.' }
+  keyGenerator: (req) => req.ip + '_' + (req.body?.plan || 'standard'),
+  message: { error: 'Превышен лимит: слишком много запросов в минуту.' }
 });
 const perDayLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000, max: 30,
-  message: { error: 'Превышен дневной лимит: не более 30 запросов в сутки.' }
+  keyGenerator: (req) => req.ip + '_' + (req.body?.plan || 'standard'),
+  message: { error: 'Превышен дневной лимит запросов.' }
 });
 
-const MAX_TEXT_CHARS = 100000; // ~70 страниц
+// ─── ТАРИФЫ ──────────────────────────────────────────────────────────
+const PLANS = {
+  standard: {
+    maxInputChars: 30000,   // символов ввода
+    maxTokens: 4000,        // символов ответа (~4000 токенов)
+    requestsPerDay: 15,
+    requestsPerMinute: 5
+  },
+  premium: {
+    maxInputChars: 100000,  // символов ввода
+    maxTokens: 16000,       // символов ответа (~30 000 символов ≈ 16 000 токенов)
+    requestsPerDay: 30,
+    requestsPerMinute: 10
+  }
+};
+
+const MAX_TEXT_CHARS = 100000; // общий лимит извлечения текста из файла
 
 // ─── ПРОМПТЫ ─────────────────────────────────────────────────────────
 const globalPrompt = `ОБЩИЕ ПРАВИЛА (обязательны во всех режимах):
@@ -240,11 +258,16 @@ async function extractFileText(f) {
 
 // ─── ОСНОВНОЙ МАРШРУТ ────────────────────────────────────────────────
 app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
-  const { messages, mode, file, file2, compareMode } = req.body;
+  const { messages, mode, file, file2, compareMode, plan } = req.body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Некорректный запрос.' });
   }
+
+  // Определяем тариф
+  const planKey = plan === 'premium' ? 'premium' : 'standard';
+  const planConfig = PLANS[planKey];
+  console.log('Тариф:', planKey, '| maxTokens:', planConfig.maxTokens, '| maxInputChars:', planConfig.maxInputChars);
 
   const modeNum = parseInt(mode) || 1;
   const modePrompt = systemPrompts[modeNum] || systemPrompts[1];
@@ -290,12 +313,23 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
         const buf = Buffer.from(file.base64, 'base64');
         const result = await mammoth.extractRawText({ buffer: buf });
         let extractedText = result.value || '';
-        if (extractedText.length > MAX_TEXT_CHARS) extractedText = extractedText.slice(0, MAX_TEXT_CHARS);
+        if (extractedText.length > planConfig.maxInputChars) {
+          extractedText = extractedText.slice(0, planConfig.maxInputChars);
+          console.log('Текст обрезан по тарифу до', planConfig.maxInputChars, 'символов');
+        }
         finalMessages[finalMessages.length - 1] = {
           role: 'user',
           content: `${lastMsg.content || 'Проанализируй документ'}\n\n[Файл: ${file.name}]\n\n${extractedText}`
         };
       }
+    }
+
+    // Проверяем лимит символов ввода (текстовый запрос без файла)
+    const lastMsgContent = finalMessages[finalMessages.length - 1]?.content;
+    if (typeof lastMsgContent === 'string' && lastMsgContent.length > planConfig.maxInputChars) {
+      return res.status(400).json({
+        error: `Превышен лимит символов для вашего тарифа (${planConfig.maxInputChars.toLocaleString()} символов). Сократите запрос или перейдите на тариф Премиум.`
+      });
     }
 
     // ─── ГАРАНТ (двухшаговый поиск) ─────────────────────────────────
@@ -371,7 +405,7 @@ app.post('/api/chat', perDayLimiter, perMinuteLimiter, async (req, res) => {
 
     const stream = client.messages.stream({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
+      max_tokens: planConfig.maxTokens,
       system: fullSystemPrompt,
       messages: finalMessages
     });
