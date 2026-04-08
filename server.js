@@ -3,10 +3,20 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const Anthropic = require('@anthropic-ai/sdk');
 const mammoth = require('mammoth');
+// 1. Добавляем новую библиотеку для прокси
+const { HttpsProxyAgent } = require('https-proxy-agent'); 
 
 // ─── ИНИЦИАЛИЗАЦИЯ (один раз при старте) ────────────────────────────
 const app = express();
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// 2. Создаем агент, который будет использовать вашу переменную из Timeweb
+const proxyAgent = new HttpsProxyAgent(process.env.HTTPS_PROXY);
+
+// 3. Передаем этот агент в настройки клиента Anthropic
+const client = new Anthropic({ 
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  httpAgent: proxyAgent 
+});
 
 app.set('trust proxy', 1);
 
