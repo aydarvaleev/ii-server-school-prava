@@ -1,12 +1,23 @@
 const express = require('express');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
 const Anthropic = require('@anthropic-ai/sdk');
 const mammoth = require('mammoth');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 // ─── ИНИЦИАЛИЗАЦИЯ (один раз при старте) ────────────────────────────
 const app = express();
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Прокси для обхода блокировки Anthropic с российских IP
+// HTTPS_PROXY задаётся в переменных окружения Timeweb: http://login:pass@ip:port
+const proxyUrl = process.env.HTTPS_PROXY;
+const clientOptions = { apiKey: process.env.ANTHROPIC_API_KEY };
+if (proxyUrl) {
+  clientOptions.httpAgent = new HttpsProxyAgent(proxyUrl);
+  console.log('Прокси подключён:', proxyUrl.replace(/:([^@]+)@/, ':***@'));
+} else {
+  console.log('Прокси не настроен — работаем напрямую');
+}
+const client = new Anthropic(clientOptions);
 
 app.set('trust proxy', 1);
 
@@ -503,13 +514,13 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    const MAX_RETRIES = 5;
-    const RETRY_DELAY = 7000; // 7 секунд между попытками
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 5000; // 5 секунд между попытками
 
     async function tryStream(attempt) {
       return new Promise((resolve, reject) => {
         const stream = client.messages.stream({
-          model: 'claude-haiku-4-5-20251001',
+          model: 'claude-sonnet-4-20250514',
           max_tokens: planConfig.maxTokens,
           system: fullSystemPrompt,
           messages: finalMessages
@@ -532,7 +543,7 @@ app.post('/api/chat', async (req, res) => {
             setTimeout(() => resolve('retry'), RETRY_DELAY);
           } else {
             console.error('Stream error:', err.message);
-            res.write(`data: ${JSON.stringify({ error: 'Сервис временно недоступен. Мы уже его чиним. Пожалуйста, повторите запрос позже.' })}\n\n`);
+            res.write(`data: ${JSON.stringify({ error: 'Сервис временно недоступен. Пожалуйста, повторите запрос через минуту.' })}\n\n`);
             res.end();
             resolve('error');
           }
