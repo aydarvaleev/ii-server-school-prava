@@ -509,7 +509,7 @@ app.post('/api/chat', async (req, res) => {
     async function tryStream(attempt) {
       return new Promise((resolve, reject) => {
         const stream = client.messages.stream({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-5',
           max_tokens: planConfig.maxTokens,
           system: fullSystemPrompt,
           messages: finalMessages
