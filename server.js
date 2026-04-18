@@ -503,8 +503,8 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY = 5000; // 5 секунд между попытками
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY = 7000; // 7 секунд между попытками
 
     async function tryStream(attempt) {
       return new Promise((resolve, reject) => {
