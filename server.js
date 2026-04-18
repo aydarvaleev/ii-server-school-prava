@@ -532,7 +532,7 @@ app.post('/api/chat', async (req, res) => {
             setTimeout(() => resolve('retry'), RETRY_DELAY);
           } else {
             console.error('Stream error:', err.message);
-            res.write(`data: ${JSON.stringify({ error: 'Сервис временно недоступен. Мы уже его чиним  Пожалуйста, повторите запрос позже.' })}\n\n`);
+            res.write(`data: ${JSON.stringify({ error: 'Сервис временно недоступен. Мы уже его чиним. Пожалуйста, повторите запрос позже.' })}\n\n`);
             res.end();
             resolve('error');
           }
