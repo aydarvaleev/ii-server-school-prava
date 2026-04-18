@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
 const Anthropic = require('@anthropic-ai/sdk');
 const mammoth = require('mammoth');
 
