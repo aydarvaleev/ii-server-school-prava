@@ -92,7 +92,8 @@ const analytics = {
   todayIPs: new Set(),
   modeStats: { 1: 0, 2: 0, 3: 0 },
   planStats: { standard: 0, premium: 0 },
-  recentQueries: [] // последние 50 запросов
+  recentQueries: [], // все запросы за 7 дней
+  dailyStats: {}     // статистика по дням
 };
 
 // Сброс дневной статистики в 00:00 МСК
@@ -114,13 +115,35 @@ function recordAnalytics(ip, plan, mode, queryText) {
   analytics.modeStats[mode] = (analytics.modeStats[mode] || 0) + 1;
   analytics.planStats[plan] = (analytics.planStats[plan] || 0) + 1;
 
-  // Сохраняем последние 50 запросов (первые 100 символов)
-  const preview = typeof queryText === 'string' ? queryText.slice(0, 100) : '[файл]';
+  // Дневная статистика
+  const today = getMskDateKey();
+  if (!analytics.dailyStats[today]) {
+    analytics.dailyStats[today] = { requests: 0, uniqueIPs: new Set() };
+  }
+  analytics.dailyStats[today].requests++;
+  analytics.dailyStats[today].uniqueIPs.add(ip);
+
+  // Сохраняем полный текст запроса
+  const fullText = typeof queryText === 'string' ? queryText : '[файл/сравнение]';
   analytics.recentQueries.unshift({
     time: new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }),
-    plan, mode, preview
+    date: today,
+    plan,
+    mode,
+    text: fullText
   });
-  if (analytics.recentQueries.length > 50) analytics.recentQueries.pop();
+
+  // Удаляем запросы старше 7 дней
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const cutoffDate = sevenDaysAgo.toISOString().slice(0, 10);
+  while (analytics.recentQueries.length > 0) {
+    const last = analytics.recentQueries[analytics.recentQueries.length - 1];
+    if (last.date < cutoffDate) analytics.recentQueries.pop();
+    else break;
+  }
+  // Максимум 500 записей в памяти
+  if (analytics.recentQueries.length > 500) analytics.recentQueries.pop();
 }
 
 // ─── ТАРИФЫ ──────────────────────────────────────────────────────────
@@ -587,15 +610,30 @@ app.get('/api/analytics', (req, res) => {
   if (secret !== process.env.ANALYTICS_SECRET && secret !== 'lex2026') {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
+  // Готовим дневную статистику для вывода
+  const dailySummary = {};
+  for (const [date, data] of Object.entries(analytics.dailyStats)) {
+    dailySummary[date] = {
+      requests: data.requests,
+      uniqueUsers: data.uniqueIPs.size
+    };
+  }
+
   res.json({
     total: analytics.totalRequests,
     today: analytics.todayRequests,
     todayDate: analytics.todayDate,
     uniqueTotal: analytics.uniqueIPs.size,
     uniqueToday: analytics.todayIPs.size,
-    modes: analytics.modeStats,
+    modes: { 
+      '01_Анализ_позиции': analytics.modeStats[1] || 0,
+      '02_Документы': analytics.modeStats[2] || 0,
+      '03_Практика': analytics.modeStats[3] || 0
+    },
     plans: analytics.planStats,
-    recent: analytics.recentQueries.slice(0, 20)
+    dailyStats: dailySummary,
+    totalStoredQueries: analytics.recentQueries.length,
+    recent: analytics.recentQueries
   });
 });
 
