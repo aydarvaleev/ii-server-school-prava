@@ -516,13 +516,18 @@ app.post('/api/chat', async (req, res) => {
           headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({ text: queryText.slice(0, 1000), count: 5, kind: ['301', '302'] })
         });
+        console.log('Сутяжник HTTP статус:', sutResp.status);
         if (sutResp.ok) {
           const sutData = await sutResp.json();
           const docs = sutData.documents || [];
+          console.log('Сутяжник групп:', docs.length);
           for (const group of docs) {
             if (group.courts) sutyazhnikDocs.push(...group.courts.slice(0, 3));
           }
-          console.log('Сутяжник найдено:', sutyazhnikDocs.length, 'судебных актов');
+          console.log('Сутяжник судебных актов:', sutyazhnikDocs.length);
+        } else {
+          const errText = await sutResp.text().catch(() => '');
+          console.log('Сутяжник ошибка:', sutResp.status, errText.slice(0, 200));
         }
       } catch (e) {
         console.error('Сутяжник ошибка:', e.message);
@@ -536,10 +541,14 @@ app.post('/api/chat', async (req, res) => {
             headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({ text: searchPhrase, page: 1, env: 'arbitr', sort: 0, sortOrder: 0 })
           });
+          console.log('Арбитражный поиск HTTP статус:', arbResp.status);
           if (arbResp.ok) {
             const arbData = await arbResp.json();
             fallbackDocs = (arbData.documents || []).slice(0, 5);
-            console.log('Арбитражный поиск найдено:', fallbackDocs.length);
+            console.log('Арбитражный поиск найдено:', fallbackDocs.length, '| всего:', arbData.totalDocs || 0);
+          } else {
+            const errText = await arbResp.text().catch(() => '');
+            console.log('Арбитражный поиск ошибка:', arbResp.status, errText.slice(0, 200));
           }
         } catch (e) {
           console.error('Арбитражный поиск ошибка:', e.message);
