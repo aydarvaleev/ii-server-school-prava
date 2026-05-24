@@ -23,7 +23,7 @@ app.set('trust proxy', 1);
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.options('*', cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // ─── СЧЁТЧИКИ ЗАПРОСОВ В ПАМЯТИ ─────────────────────────────────────
 // Формат: { 'ip_plan_date': count }
@@ -504,61 +504,27 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (modeNum === 3 && searchPhrase) {
-      // ── Режим 03: Сутяжник + полный текст топ-3 судебных актов ──
+      // ── Режим 03: поиск судебной практики через основную базу ГАРАНТ ──
       const token = process.env.GARANT_TOKEN;
-      let sutyazhnikDocs = [];
-      let fallbackDocs = [];
 
-      // Шаг 1: Сутяжник — специализированный поиск судебной практики
-      try {
-        const sutResp = await fetch('https://api.garant.ru/v2/sutyazhnik-search', {
-          method: 'POST',
-          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ text: queryText.slice(0, 1000), count: 5, kind: ['301', '302'] })
-        });
-        console.log('Сутяжник HTTP статус:', sutResp.status);
-        if (sutResp.ok) {
-          const sutData = await sutResp.json();
-          const docs = sutData.documents || [];
-          console.log('Сутяжник групп:', docs.length);
-          for (const group of docs) {
-            if (group.courts) sutyazhnikDocs.push(...group.courts.slice(0, 3));
-          }
-          console.log('Сутяжник судебных актов:', sutyazhnikDocs.length);
-        } else {
-          const errText = await sutResp.text().catch(() => '');
-          console.log('Сутяжник ошибка:', sutResp.status, errText.slice(0, 200));
-        }
-      } catch (e) {
-        console.error('Сутяжник ошибка:', e.message);
-      }
+      // Поиск судебной практики через основной интернет-комплект
+      const [courtSearchDocs, lawSearchDocs] = await Promise.all([
+        searchGarant(searchPhrase, 'судебная практика решение суда арбитражный'),
+        searchGarant(searchPhrase, 'судебное решение постановление суда')
+      ]);
 
-      // Шаг 2: если Сутяжник ничего не дал — обычный поиск по арбитражной базе
-      if (sutyazhnikDocs.length === 0) {
-        try {
-          const arbResp = await fetch('https://api.garant.ru/v2/search', {
-            method: 'POST',
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ text: searchPhrase, page: 1, env: 'arbitr', sort: 0, sortOrder: 0 })
-          });
-          console.log('Арбитражный поиск HTTP статус:', arbResp.status);
-          if (arbResp.ok) {
-            const arbData = await arbResp.json();
-            fallbackDocs = (arbData.documents || []).slice(0, 5);
-            console.log('Арбитражный поиск найдено:', fallbackDocs.length, '| всего:', arbData.totalDocs || 0);
-          } else {
-            const errText = await arbResp.text().catch(() => '');
-            console.log('Арбитражный поиск ошибка:', arbResp.status, errText.slice(0, 200));
-          }
-        } catch (e) {
-          console.error('Арбитражный поиск ошибка:', e.message);
+      const seen = new Set();
+      const courtDocs = [];
+      for (const d of [...(courtSearchDocs || []), ...(lawSearchDocs || [])]) {
+        if (!seen.has(d.url) && courtDocs.length < 5) {
+          seen.add(d.url);
+          courtDocs.push(d);
         }
       }
-
-      const courtDocs = sutyazhnikDocs.length > 0 ? sutyazhnikDocs : fallbackDocs;
+      console.log('ГАРАНТ режим 03: найдено судебных документов:', courtDocs.length);
 
       if (courtDocs.length > 0) {
-        // Шаг 3: загружаем полный текст топ-3 документов (HTML экспорт)
+        // Загружаем полный текст топ-3 документов (HTML экспорт)
         const textsToLoad = courtDocs.slice(0, 3);
         const docTexts = await Promise.all(textsToLoad.map(async (doc) => {
           try {
