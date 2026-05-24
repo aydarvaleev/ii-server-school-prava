@@ -485,9 +485,11 @@ app.post('/api/chat', async (req, res) => {
       .slice(0, 6).join(' ').slice(0, 100);
 
     if (modeNum === 1 && searchPhrase) {
-      // ── Режим 01: только ссылки на законодательство (как раньше) ──
+      // ── Режим 01: ссылки на законодательство ──
+      // Используем и полный запрос и ключевые слова для лучшего покрытия
+      const garantQuery1 = queryText.slice(0, 200);
       const [lawDocs, courtDocs] = await Promise.all([
-        searchGarant(searchPhrase),
+        searchGarant(garantQuery1),
         searchGarant(searchPhrase, 'судебная практика решение суда')
       ]);
       const allDocs = [];
@@ -507,21 +509,25 @@ app.post('/api/chat', async (req, res) => {
       // ── Режим 03: поиск судебной практики + метаданные документов ──
       const token = process.env.GARANT_TOKEN;
 
-      // Два параллельных поиска — судебные акты через isQuery с типом
+      // Используем полный текст запроса пользователя — так ГАРАНТ найдёт больше
+      // searchPhrase (фильтрованные слова) часто даёт плохие результаты
+      const garantQuery = queryText.slice(0, 200); // полный запрос пользователя
+      const garantQuery2 = searchPhrase + ' притворная сделка суд решение';
+
       const [res1, res2] = await Promise.all([
         fetch('https://api.garant.ru/v2/search', {
           method: 'POST',
           headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({
-            text: `MorphoText(${searchPhrase}) & BOOL(Type(Решение) | Type(Постановление) | Type(Определение))`,
-            isQuery: true, page: 1, env: 'internet', sort: 0, sortOrder: 0
+            text: garantQuery,
+            page: 1, env: 'internet', sort: 0, sortOrder: 0
           })
         }),
         fetch('https://api.garant.ru/v2/search', {
           method: 'POST',
           headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({
-            text: searchPhrase + ' судебная практика решение суда',
+            text: garantQuery2,
             page: 1, env: 'internet', sort: 0, sortOrder: 0
           })
         })
