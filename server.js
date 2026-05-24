@@ -504,79 +504,83 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (modeNum === 3 && searchPhrase) {
-      // ── Режим 03: поиск судебной практики через основную базу ГАРАНТ ──
+      // ── Режим 03: поиск судебной практики + метаданные документов ──
       const token = process.env.GARANT_TOKEN;
 
-      // Поиск судебной практики через основной интернет-комплект
-      const [courtSearchDocs, lawSearchDocs] = await Promise.all([
-        searchGarant(searchPhrase, 'судебная практика решение суда арбитражный'),
-        searchGarant(searchPhrase, 'судебное решение постановление суда')
+      // Два параллельных поиска — судебные акты через isQuery с типом
+      const [res1, res2] = await Promise.all([
+        fetch('https://api.garant.ru/v2/search', {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            text: `MorphoText(${searchPhrase}) & BOOL(Type(Решение) | Type(Постановление) | Type(Определение))`,
+            isQuery: true, page: 1, env: 'internet', sort: 0, sortOrder: 0
+          })
+        }),
+        fetch('https://api.garant.ru/v2/search', {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            text: searchPhrase + ' судебная практика решение суда',
+            page: 1, env: 'internet', sort: 0, sortOrder: 0
+          })
+        })
       ]);
 
       const seen = new Set();
       const courtDocs = [];
-      for (const d of [...(courtSearchDocs || []), ...(lawSearchDocs || [])]) {
-        if (!seen.has(d.url) && courtDocs.length < 5) {
-          seen.add(d.url);
-          courtDocs.push(d);
+
+      for (const resp of [res1, res2]) {
+        if (resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          for (const d of (data.documents || [])) {
+            if (!seen.has(d.url) && courtDocs.length < 8) {
+              seen.add(d.url);
+              courtDocs.push(d);
+            }
+          }
         }
       }
-      console.log('ГАРАНТ режим 03: найдено судебных документов:', courtDocs.length);
+      console.log('ГАРАНТ режим 03: найдено документов:', courtDocs.length);
+
+      // Загружаем метаданные топ-5 документов (/v2/topic - 300 запросов/мес)
+      const metaDocs = await Promise.all(courtDocs.slice(0, 5).map(async (doc) => {
+        try {
+          const metaResp = await fetch(`https://api.garant.ru/v2/topic/${doc.topic}`, {
+            headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` }
+          });
+          if (!metaResp.ok) return { ...doc, meta: null };
+          const meta = await metaResp.json();
+          return { ...doc, meta };
+        } catch (e) {
+          return { ...doc, meta: null };
+        }
+      }));
+
+      console.log('ГАРАНТ режим 03: загружено метаданных:', metaDocs.filter(d => d.meta).length);
 
       if (courtDocs.length > 0) {
-        // Загружаем полный текст топ-3 документов (HTML экспорт)
-        const textsToLoad = courtDocs.slice(0, 3);
-        const docTexts = await Promise.all(textsToLoad.map(async (doc) => {
-          try {
-            const htmlResp = await fetch(`https://api.garant.ru/v2/topic/${doc.topic}/html`, {
-              headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (!htmlResp.ok) return null;
-            const htmlData = await htmlResp.json();
-            // Собираем текст из всех страниц, убираем HTML-теги
-            const rawHtml = (htmlData.items || []).map(p => p.text || '').join('\n');
-            const plainText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-            // Берём первые 3000 символов — достаточно для реквизитов и сути
-            return {
-              name: doc.name,
-              url: doc.url,
-              text: plainText.slice(0, 3000)
-            };
-          } catch (e) {
-            console.error('Экспорт документа ошибка:', e.message);
-            return null;
-          }
-        }));
-
-        const loadedDocs = docTexts.filter(Boolean);
-        const skippedDocs = courtDocs.slice(loadedDocs.length);
-
-        console.log('ГАРАНТ режим 03: загружено текстов:', loadedDocs.length, '| только ссылки:', skippedDocs.length);
-
         garantContext = '\n\n─── СУДЕБНАЯ ПРАКТИКА ИЗ БАЗЫ ГАРАНТ ───\n' +
-          'Ниже приведены реальные судебные акты из базы ГАРАНТ. ' +
-          'Используй конкретные реквизиты (название суда, номер дела, дату) из текстов ниже. ' +
-          'Ссылайся на них в формате [Название](ссылка).\n\n';
+          'Найдены следующие документы из базы ГАРАНТ. ' +
+          'Используй реквизиты из метаданных ниже (тип, номер, дата, орган). ' +
+          'Ссылайся в формате [Название](ссылка).\n\n';
 
-        // Документы с полным текстом
-        if (loadedDocs.length > 0) {
-          garantContext += loadedDocs.map((d, i) => (
-            `── Документ ${i + 1}: ${d.name} ──\n` +
-            `Ссылка: https://internet.garant.ru${d.url}\n\n` +
-            `${d.text}\n`
-          )).join('\n');
-        }
-
-        // Документы только со ссылками (если экспорт не загрузился)
-        if (skippedDocs.length > 0) {
-          garantContext += '\n\nДополнительные документы (только ссылки):\n' +
-            skippedDocs.map((d, i) => `${i + 1}. ${d.name}\n   Ссылка: https://internet.garant.ru${d.url}`).join('\n\n');
-        }
+        garantContext += metaDocs.map((d, i) => {
+          const m = d.meta;
+          let info = `${i + 1}. ${d.name}\n   Ссылка: https://internet.garant.ru${d.url}`;
+          if (m) {
+            if (m.type?.length)    info += `\n   Тип: ${m.type.join(', ')}`;
+            if (m.number?.length)  info += `\n   Номер: ${m.number.join(', ')}`;
+            if (m.date?.length)    info += `\n   Дата: ${m.date.join(', ')}`;
+            if (m.adopted?.length) info += `\n   Орган: ${m.adopted[0]}`;
+            if (m.status)          info += `\n   Статус: ${m.status}`;
+          }
+          return info;
+        }).join('\n\n');
       } else {
-        // Ничего не нашли — честно говорим об этом
-        garantContext = '\n\n─── ГАРАНТ ───\nПо данному запросу судебная практика в базе ГАРАНТ не найдена. ' +
-          'Используй свои знания для анализа подходов судов, но явно укажи что конкретные реквизиты ' +
-          'необходимо проверить в ГАРАНТ, КонсультантПлюс или на kad.arbitr.ru.';
+        garantContext = '\n\n─── ГАРАНТ ───\nПо данному запросу документы в базе ГАРАНТ не найдены. ' +
+          'Проанализируй подходы судов на основе своих знаний и укажи что конкретные реквизиты ' +
+          'нужно проверить в ГАРАНТ, КонсультантПлюс или на kad.arbitr.ru.';
       }
     }
 
