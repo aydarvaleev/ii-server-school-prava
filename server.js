@@ -487,7 +487,6 @@ app.post('/api/chat', async (req, res) => {
 
     if (modeNum === 1 && searchPhrase) {
       // ── Режим 01: ссылки на законодательство ──
-      // Используем и полный запрос и ключевые слова для лучшего покрытия
       const garantQuery1 = queryText.slice(0, 200);
       const [lawDocs, courtDocs] = await Promise.all([
         searchGarant(garantQuery1),
@@ -510,27 +509,19 @@ app.post('/api/chat', async (req, res) => {
       // ── Режим 03: поиск судебной практики + метаданные документов ──
       const token = process.env.GARANT_TOKEN;
 
-      // Используем полный текст запроса пользователя — так ГАРАНТ найдёт больше
-      // searchPhrase (фильтрованные слова) часто даёт плохие результаты
-      const garantQuery = queryText.slice(0, 200); // полный запрос пользователя
+      const garantQuery = queryText.slice(0, 200);
       const garantQuery2 = searchPhrase + ' притворная сделка суд решение';
 
       const [res1, res2] = await Promise.all([
         fetch('https://api.garant.ru/v2/search', {
           method: 'POST',
           headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({
-            text: garantQuery,
-            page: 1, env: 'internet', sort: 0, sortOrder: 0
-          })
+          body: JSON.stringify({ text: garantQuery, page: 1, env: 'internet', sort: 0, sortOrder: 0 })
         }),
         fetch('https://api.garant.ru/v2/search', {
           method: 'POST',
           headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({
-            text: garantQuery2,
-            page: 1, env: 'internet', sort: 0, sortOrder: 0
-          })
+          body: JSON.stringify({ text: garantQuery2, page: 1, env: 'internet', sort: 0, sortOrder: 0 })
         })
       ]);
 
@@ -550,7 +541,6 @@ app.post('/api/chat', async (req, res) => {
       }
       console.log('ГАРАНТ режим 03: найдено документов:', courtDocs.length);
 
-      // Загружаем метаданные топ-5 документов (/v2/topic - 300 запросов/мес)
       const metaDocs = await Promise.all(courtDocs.slice(0, 5).map(async (doc) => {
         try {
           const metaResp = await fetch(`https://api.garant.ru/v2/topic/${doc.topic}`, {
@@ -606,7 +596,15 @@ app.post('/api/chat', async (req, res) => {
         const stream = client.messages.stream({
           model: 'claude-sonnet-4-6',
           max_tokens: planConfig.maxTokens,
-          system: fullSystemPrompt,
+          // ─── PROMPT CACHING: system prompt кешируется на 5 минут ───
+          // Экономия до 90% на input токенах system prompt
+          system: [
+            {
+              type: 'text',
+              text: fullSystemPrompt,
+              cache_control: { type: 'ephemeral' }
+            }
+          ],
           messages: finalMessages
         });
 
@@ -622,7 +620,6 @@ app.post('/api/chat', async (req, res) => {
           );
           if (isOverloaded && attempt < MAX_RETRIES) {
             console.log(`Anthropic перегружен, попытка ${attempt + 1}/${MAX_RETRIES} через ${RETRY_DELAY/1000}с...`);
-            // Сообщаем пользователю что ждём
             res.write(`data: ${JSON.stringify({ text: `\n\n⏳ Сервис временно перегружен, повторяю запрос (попытка ${attempt + 1})...\n\n` })}\n\n`);
             setTimeout(() => resolve('retry'), RETRY_DELAY);
           } else {
@@ -671,7 +668,6 @@ app.get('/api/analytics', (req, res) => {
   if (secret !== process.env.ANALYTICS_SECRET && secret !== 'lex2026') {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
-  // Готовим дневную статистику для вывода
   const dailySummary = {};
   for (const [date, data] of Object.entries(analytics.dailyStats)) {
     dailySummary[date] = {
@@ -686,7 +682,7 @@ app.get('/api/analytics', (req, res) => {
     todayDate: analytics.todayDate,
     uniqueTotal: analytics.uniqueIPs.size,
     uniqueToday: analytics.todayIPs.size,
-    modes: { 
+    modes: {
       '01_Анализ_позиции': analytics.modeStats[1] || 0,
       '02_Документы': analytics.modeStats[2] || 0,
       '03_Практика': analytics.modeStats[3] || 0
