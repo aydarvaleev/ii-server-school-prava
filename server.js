@@ -149,14 +149,14 @@ function recordAnalytics(ip, plan, mode, queryText) {
 // ─── ТАРИФЫ ──────────────────────────────────────────────────────────
 const PLANS = {
   standard: {
-    maxInputChars: 30000,   // символов ввода
-    maxTokens: 4000,        // символов ответа (~4000 токенов)
+    maxInputChars: 20000,   // символов ввода
+    maxTokens: 3000,        // токенов ответа (~6 000 символов)
     requestsPerDay: 15,
     requestsPerMinute: 5
   },
   premium: {
-    maxInputChars: 100000,  // символов ввода
-    maxTokens: 16000,       // символов ответа (~30 000 символов ≈ 16 000 токенов)
+    maxInputChars: 60000,   // символов ввода
+    maxTokens: 10000,       // токенов ответа (~20 000 символов)
     requestsPerDay: 30,
     requestsPerMinute: 10
   }
@@ -382,7 +382,7 @@ async function extractFileText(f) {
 
 // ─── ОСНОВНОЙ МАРШРУТ ────────────────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
-  const { messages, mode, file, file2, compareMode, plan } = req.body;
+  const { messages, mode, file, file2, compareMode, plan, userId } = req.body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Некорректный запрос.' });
@@ -393,8 +393,16 @@ app.post('/api/chat', async (req, res) => {
   const planConfig = PLANS[planKey];
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
 
+  // Идентификация пользователя: приоритет — ID из GetCourse, fallback — IP
+  // userId приходит из HTML как {{user.id}} (GetCourse подставляет автоматически)
+  const clientId = (userId && String(userId).trim() !== '' && String(userId) !== '0')
+    ? 'gc_' + userId
+    : clientIP;
+
+  console.log('Идентификатор:', clientId.startsWith('gc_') ? 'GetCourse user ' + userId : 'IP ' + clientIP);
+
   // Проверяем лимиты
-  const limitCheck = checkAndIncrementLimits(clientIP, planKey);
+  const limitCheck = checkAndIncrementLimits(clientId, planKey);
   if (!limitCheck.allowed) {
     return res.status(429).json({ error: limitCheck.error, used: limitCheck.used, limit: limitCheck.limit });
   }
@@ -468,7 +476,7 @@ app.post('/api/chat', async (req, res) => {
     const lastMsgForAnalytics = finalMessages[finalMessages.length - 1];
     const queryPreview = typeof lastMsgForAnalytics?.content === 'string'
       ? lastMsgForAnalytics.content : '[файл/сравнение]';
-    recordAnalytics(clientIP, planKey, modeNum, queryPreview);
+    recordAnalytics(clientId, planKey, modeNum, queryPreview);
 
     // ─── ГАРАНТ ───────────────────────────────────────────────────────
     let garantContext = '';
@@ -657,7 +665,11 @@ app.get('/api/limits', (req, res) => {
   const plan = req.query.plan || 'standard';
   const planKey = plan === 'premium' ? 'premium' : 'standard';
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
-  const used = getUsedToday(clientIP, planKey);
+  const reqUserId = req.query.userId;
+  const clientId = (reqUserId && reqUserId.trim() !== '' && reqUserId !== '0')
+    ? 'gc_' + reqUserId
+    : clientIP;
+  const used = getUsedToday(clientId, planKey);
   const limit = PLANS[planKey].requestsPerDay;
   res.json({ used, limit, remaining: limit - used });
 });
